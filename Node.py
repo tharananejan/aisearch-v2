@@ -33,6 +33,7 @@ class Node:
         self.y = y
         self.heuristic = heuristic
         self.neighbors = {}  # {neighbor_node: weight}
+        self.edge_labels = {}  # {neighbor_node: label_string}
         self.state = 'empty'  # 'empty', 'source', 'goal', 'visited', 'path'
         self.parent = None
         self.cost = 0  # g(n) - cost from start
@@ -56,7 +57,21 @@ class Node:
         """
         if neighbor in self.neighbors:
             del self.neighbors[neighbor]
+        if neighbor in self.edge_labels:
+            del self.edge_labels[neighbor]
             
+    def set_edge_label(self, neighbor, label):
+        """Set a visual label for an edge"""
+        if label is None:
+            if neighbor in self.edge_labels:
+                del self.edge_labels[neighbor]
+        else:
+            self.edge_labels[neighbor] = str(label)
+            
+    def get_edge_label(self, neighbor):
+        """Get visual label for an edge if it exists"""
+        return self.edge_labels.get(neighbor, None)
+
     def get_neighbors(self):
         """
         Get list of all neighbors
@@ -127,19 +142,26 @@ class Node:
         # Export custom_name if available, otherwise use numeric name
         export_name = self.custom_name if hasattr(self, 'custom_name') else self.name
         
-        # For neighbors, also use custom_name if available
+        # For neighbors and labels, also use custom_name if available
         neighbor_dict = {}
+        edge_labels_dict = {}
         for n, w in self.neighbors.items():
             neighbor_name = n.custom_name if hasattr(n, 'custom_name') else n.name
             neighbor_dict[neighbor_name] = w
+            if n in self.edge_labels:
+                edge_labels_dict[neighbor_name] = self.edge_labels[n]
         
         return {
             'name': export_name,
+            'original_name': self.name,
             'x': self.x,
             'y': self.y,
             'heuristic': self.heuristic,
             'state': self.state,
-            'neighbors': neighbor_dict
+            'neighbors': neighbor_dict,
+            'edge_labels': edge_labels_dict,
+            'original_neighbors': {n.name: w for n, w in self.neighbors.items()},
+            'original_edge_labels': {n.name: self.edge_labels[n] for n in getattr(self, 'edge_labels', {})}
         }
     
     @staticmethod
@@ -161,5 +183,10 @@ class Node:
         for neighbor_name, weight in data.get('neighbors', {}).items():
             if neighbor_name in nodes_dict:
                 node.add_neighbor(nodes_dict[neighbor_name], weight)
+                
+        # Restore edge labels
+        for neighbor_name, label in data.get('edge_labels', {}).items():
+            if neighbor_name in nodes_dict:
+                node.set_edge_label(nodes_dict[neighbor_name], label)
         
         return node

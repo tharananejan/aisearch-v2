@@ -173,6 +173,9 @@
                         <button id="btn-clear-path" class="btn-secondary btn-small">
                             <i data-lucide="eraser"></i> Clear Path
                         </button>
+                        <button id="btn-undo" class="btn-secondary btn-small" title="Undo Last Action (Ctrl+Z)">
+                            <i data-lucide="undo"></i> Undo
+                        </button>
                     </div>
                     <input type="file" id="file-input" accept=".json" style="display: none;">
                 </div>
@@ -430,6 +433,16 @@
                     <i data-lucide="check"></i> Create Node
                 </button>
             </div>
+        </div>
+    </div>
+
+    <!-- Edge Context Menu -->
+    <div id="edge-context-menu" style="display: none; position: absolute; z-index: 1000; background: var(--panel-bg, #1f2937); border: 1px solid var(--border-color, #374151); border-radius: 6px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 5px; min-width: 140px;">
+        <div id="ctx-label-edge" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary, #f9fafb); border-radius: 4px;" onmouseover="this.style.backgroundColor='rgba(59, 130, 246, 0.1)'" onmouseout="this.style.backgroundColor='transparent'">
+            <i data-lucide="tag" style="width: 16px; height: 16px;"></i> Label Edge
+        </div>
+        <div id="ctx-delete-edge" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 14px; color: #ef4444; border-radius: 4px;" onmouseover="this.style.backgroundColor='rgba(239, 68, 68, 0.1)'" onmouseout="this.style.backgroundColor='transparent'">
+            <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Delete Edge
         </div>
     </div>
 

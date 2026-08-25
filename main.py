@@ -28,6 +28,7 @@ class GraphVisualizer:
         self.nodes = {}  # {node_id: Node}
         self.node_counter = 0
         self.source_node = None
+        self.context_edge = None
         self.goal_nodes = []  # Can have multiple goals
         
         # View transform
@@ -237,6 +238,43 @@ class GraphVisualizer:
             self.ctx.stroke()
             y += grid_size
     
+    def get_node_radius_and_lines(self, ctx, node):
+        """Calculate dynamic radius based on text length and get text lines."""
+        display_name = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
+        ctx.font = 'bold 14px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+        
+        words = str(display_name).split(' ')
+        lines = []
+        current_line = words[0] if words else ""
+        max_width = 80 # Maximum width before wrapping
+        
+        for word in words[1:]:
+            width = ctx.measureText(current_line + " " + word).width
+            if width < max_width:
+                current_line += " " + word
+            else:
+                lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+            
+        max_line_width = max(ctx.measureText(line).width for line in lines) if lines else 0
+        
+        should_show_heuristic = (
+            node.heuristic > 0 and 
+            hasattr(self, 'current_algo_type') and 
+            self.current_algo_type == 'informed'
+        )
+        
+        total_lines = len(lines)
+        if should_show_heuristic:
+            total_lines += 1
+            
+        text_height = 16 * total_lines
+        
+        req_radius = math.sqrt((max_line_width/2)**2 + (text_height/2)**2) + 12 # 12px padding
+        return max(25.0, req_radius), lines
+
     def draw_node(self, node):
         """Draw a node with crisp rendering"""
         colors = {
@@ -247,7 +285,7 @@ class GraphVisualizer:
             'path': '#f59e0b'
         }
         
-        radius = 25
+        radius, lines = self.get_node_radius_and_lines(self.ctx, node)
         
         # Node circle
         self.ctx.beginPath()
@@ -274,9 +312,19 @@ class GraphVisualizer:
             text_color = '#ffffff'  # White for red/green/purple nodes
         
         self.ctx.fillStyle = text_color
-        # Use custom_name if available, otherwise use node.name
-        display_name = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
-        self.ctx.fillText(display_name, node.x, node.y - 6)
+        
+        should_show_heuristic = (
+            node.heuristic > 0 and 
+            hasattr(self, 'current_algo_type') and 
+            self.current_algo_type == 'informed'
+        )
+        total_lines = len(lines) + (1 if should_show_heuristic else 0)
+        
+        # Draw multiline text
+        line_height = 16
+        start_y = node.y - ((total_lines - 1) * line_height) / 2
+        for i, line in enumerate(lines):
+            self.ctx.fillText(line, node.x, start_y + i * line_height)
         
         # Highlight selected node
         if self.selected_node == node:
@@ -296,6 +344,11 @@ class GraphVisualizer:
         )
         
         if should_show_heuristic:
+            radius, lines = self.get_node_radius_and_lines(self.ctx, node)
+            line_height = 16
+            start_y = node.y - ((len(lines)) * line_height) / 2
+            h_y = start_y + len(lines) * line_height
+            
             # Smart color based on node state (same logic as node name)
             # Black text for light nodes (empty=white, path=yellow)
             # White text for dark nodes (source=red, goal=green, visited=purple)
@@ -309,7 +362,7 @@ class GraphVisualizer:
             self.ctx.textAlign = 'center'
             # Format as integer (no decimal point)
             h_value = int(node.heuristic)
-            self.ctx.fillText(f'h={h_value}', node.x, node.y + 8)
+            self.ctx.fillText(f'h={h_value}', node.x, h_y)
     
     def draw_node_on_context(self, ctx, node):
         """Draw a node on a specific context (for export)"""
@@ -321,7 +374,7 @@ class GraphVisualizer:
             'path': '#f59e0b'
         }
         
-        radius = 25
+        radius, lines = self.get_node_radius_and_lines(ctx, node)
         
         # Node circle
         ctx.beginPath()
@@ -341,7 +394,18 @@ class GraphVisualizer:
         ctx.textBaseline = 'middle'
         text_color = '#111827' if node.state == 'empty' else '#ffffff'
         ctx.fillStyle = text_color
-        ctx.fillText(str(node.name), node.x, node.y - 6)
+        
+        should_show_heuristic = (
+            node.heuristic > 0 and 
+            hasattr(self, 'current_algo_type') and 
+            self.current_algo_type == 'informed'
+        )
+        total_lines = len(lines) + (1 if should_show_heuristic else 0)
+        
+        line_height = 16
+        start_y = node.y - ((total_lines - 1) * line_height) / 2
+        for i, line in enumerate(lines):
+            ctx.fillText(line, node.x, start_y + i * line_height)
     
     def draw_node_label_on_context(self, ctx, node):
         """Draw node heuristic label on a specific context (for export)"""
@@ -353,14 +417,16 @@ class GraphVisualizer:
         )
         
         if should_show_heuristic:
-            # Theme-aware text color
-            is_dark = 'dark-mode' in document.body.classList
-            text_color = '#ffffff' if is_dark else '#1f2937'
+            radius, lines = self.get_node_radius_and_lines(ctx, node)
+            line_height = 16
+            start_y = node.y - ((len(lines)) * line_height) / 2
+            h_y = start_y + len(lines) * line_height
             
+            text_color = '#111827' if node.state == 'empty' else '#ffffff'
             ctx.fillStyle = text_color
             ctx.font = 'bold 12px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
             ctx.textAlign = 'center'
-            ctx.fillText(f'h={node.heuristic}', node.x, node.y + 8)
+            ctx.fillText(f'h={int(node.heuristic)}', node.x, h_y)
     
     def draw_edge_on_context(self, ctx, node1, node2, weight):
         """Draw an edge on a specific context (for export)"""
@@ -394,7 +460,7 @@ class GraphVisualizer:
         # Draw arrow head with offset
         angle = math.atan2(node2.y - node1.y, node2.x - node1.x)
         arrow_length = 12
-        node_radius = 25
+        node_radius, _ = self.get_node_radius_and_lines(ctx, node2)
         end_x = node2.x - math.cos(angle) * node_radius + offset_x
         end_y = node2.y - math.sin(angle) * node_radius + offset_y
         
@@ -415,9 +481,8 @@ class GraphVisualizer:
         
         # Draw weight label: show when labels are enabled (users can toggle labels)
         # This allows BFS/DFS/DLS/etc. to show path/edge costs when users enable labels.
-        should_show_weight = (
-            hasattr(self, 'show_labels') and self.show_labels
-        )
+        has_custom_label = hasattr(node1, 'get_edge_label') and node1.get_edge_label(node2) is not None
+        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
         if should_show_weight:
             # Apply offset to label position
             mid_x = (node1.x + node2.x) / 2 + offset_x
@@ -428,7 +493,16 @@ class GraphVisualizer:
             ctx.textBaseline = 'middle'
             
             # Background
-            text = str(int(weight)) if weight == int(weight) else str(weight)
+            label = node1.get_edge_label(node2) if hasattr(node1, 'get_edge_label') else None
+            weight_str = str(int(weight)) if weight == int(weight) else str(weight)
+            
+            if label is not None:
+                if hasattr(self, 'show_labels') and self.show_labels:
+                    text = f"{label} ({weight_str})"
+                else:
+                    text = str(label)
+            else:
+                text = weight_str
             metrics = ctx.measureText(text)
             text_width = metrics.width
             padding = 5
@@ -493,8 +567,9 @@ class GraphVisualizer:
         # Draw arrow head with offset
         self.draw_arrow_head(node1, node2, offset_x, offset_y, is_path_edge)
         
-        # Show weight label when labels are enabled (users can toggle labels)
-        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels)
+        # Show weight label when labels are enabled (users can toggle labels), or if a custom label exists
+        has_custom_label = hasattr(node1, 'get_edge_label') and node1.get_edge_label(node2) is not None
+        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
         if should_show_weight:
             # Apply offset to label position for bidirectional edges
             mid_x = (node1.x + node2.x) / 2 + offset_x
@@ -506,7 +581,16 @@ class GraphVisualizer:
             self.ctx.textBaseline = 'middle'
             
             # Background
-            text = str(int(weight)) if weight == int(weight) else str(weight)
+            label = node1.get_edge_label(node2) if hasattr(node1, 'get_edge_label') else None
+            weight_str = str(int(weight)) if weight == int(weight) else str(weight)
+            
+            if label is not None:
+                if hasattr(self, 'show_labels') and self.show_labels:
+                    text = f"{label} ({weight_str})"
+                else:
+                    text = str(label)
+            else:
+                text = weight_str
             metrics = self.ctx.measureText(text)
             text_width = metrics.width
             padding = 5
@@ -543,8 +627,9 @@ class GraphVisualizer:
         self.ctx.lineWidth = 5 if is_path_edge else 3  # Thicker for path edges
         self.ctx.stroke()
         
-        # Show weight label when labels are enabled (users can toggle labels)
-        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels)
+        # Show weight label when labels are enabled (users can toggle labels), or if a custom label exists
+        has_custom_label = hasattr(node1, 'get_edge_label') and node1.get_edge_label(node2) is not None
+        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
 
         if should_show_weight:
             mid_x = (node1.x + node2.x) / 2
@@ -554,7 +639,16 @@ class GraphVisualizer:
             self.ctx.textAlign = 'center'
             self.ctx.textBaseline = 'middle'
             
-            text = str(int(weight)) if weight == int(weight) else str(weight)
+            label = node1.get_edge_label(node2) if hasattr(node1, 'get_edge_label') else None
+            weight_str = str(int(weight)) if weight == int(weight) else str(weight)
+            
+            if label is not None:
+                if hasattr(self, 'show_labels') and self.show_labels:
+                    text = f"{label} ({weight_str})"
+                else:
+                    text = str(label)
+            else:
+                text = weight_str
             metrics = self.ctx.measureText(text)
             text_width = metrics.width
             padding = 5
@@ -585,11 +679,8 @@ class GraphVisualizer:
         ctx.stroke()
         
         # Draw weight label if applicable
-        should_show_weight = (
-            weight != 1 and 
-            hasattr(self, 'current_algo_type') and 
-            self.current_algo_type in ['informed', 'cost_only']
-        )
+        has_custom_label = hasattr(node1, 'get_edge_label') and node1.get_edge_label(node2) is not None
+        should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
         
         if should_show_weight:
             mid_x = (node1.x + node2.x) / 2
@@ -599,7 +690,16 @@ class GraphVisualizer:
             ctx.textAlign = 'center'
             ctx.textBaseline = 'middle'
             
-            text = str(int(weight)) if weight == int(weight) else str(weight)
+            label = node1.get_edge_label(node2) if hasattr(node1, 'get_edge_label') else None
+            weight_str = str(int(weight)) if weight == int(weight) else str(weight)
+            
+            if label is not None:
+                if hasattr(self, 'show_labels') and self.show_labels:
+                    text = f"{label} ({weight_str})"
+                else:
+                    text = str(label)
+            else:
+                text = weight_str
             metrics = ctx.measureText(text)
             text_width = metrics.width
             padding = 5
@@ -625,7 +725,7 @@ class GraphVisualizer:
         arrow_length = 12
         
         # Calculate arrow position (at edge of node circle) with offset
-        node_radius = 25
+        node_radius, _ = self.get_node_radius_and_lines(self.ctx, to_node)
         end_x = to_node.x - math.cos(angle) * node_radius + offset_x
         end_y = to_node.y - math.sin(angle) * node_radius + offset_y
         
@@ -937,7 +1037,8 @@ class GraphVisualizer:
             dy = node.y - world_y
             distance = math.sqrt(dx * dx + dy * dy)
             
-            if distance <= 25:  # Node radius
+            node_radius, _ = self.get_node_radius_and_lines(self.ctx, node)
+            if distance <= node_radius:  # Dynamic Node radius
                 return node
         
         return None
@@ -1032,6 +1133,7 @@ class GraphVisualizer:
         document['file-input'].bind('change', self.load_graph)
         document['btn-reset-canvas'].bind('click', self.reset_canvas)
         document['btn-clear-path'].bind('click', self.clear_path)
+        document['btn-undo'].bind('click', lambda e: self.undo())
         
         # Export buttons
         document['btn-export-png'].bind('click', self.export_png)
@@ -1074,6 +1176,11 @@ class GraphVisualizer:
         
         # Window resize
         window.bind('resize', lambda e: self.on_resize())
+        
+        # Edge context menu bindings
+        document['ctx-label-edge'].bind('click', self.on_ctx_label_edge)
+        document['ctx-delete-edge'].bind('click', self.on_ctx_delete_edge)
+        document.bind('click', self.on_document_click)
     
     def on_mouse_down(self, event):
         """Handle mouse down on canvas"""
@@ -1151,6 +1258,7 @@ class GraphVisualizer:
                 if value is not None:
                     try:
                         self.set_edge_weight(from_node, to_node, value)
+                        self.ensure_labels_visible()
                     except:
                         alert('Invalid number')
         
@@ -1483,9 +1591,66 @@ class GraphVisualizer:
         self.resize_canvas()
         self.render()
     
+    def on_document_click(self, event):
+        context_menu = document['edge-context-menu']
+        if context_menu.style.display == 'block':
+            context_menu.style.display = 'none'
+
+    def ensure_labels_visible(self):
+        """Automatically turn on labels when a user explicitly sets a weight or label"""
+        if hasattr(self, 'show_labels') and not self.show_labels:
+            self.show_labels = True
+            btn = document['btn-toggle-labels']
+            if btn:
+                btn.classList.add('active')
+
+    def on_ctx_label_edge(self, event):
+        document['edge-context-menu'].style.display = 'none'
+        if self.context_edge:
+            from_node, to_node = self.context_edge
+            current_label = from_node.get_edge_label(to_node) or ""
+            
+            value = window.prompt(f'Enter edge label (text):', current_label)
+            if value is not None:
+                value = value.strip()
+                if value == "":
+                    from_node.set_edge_label(to_node, None)
+                    if self.graph_is_undirected and from_node in to_node.neighbors:
+                        to_node.set_edge_label(from_node, None)
+                else:
+                    from_node.set_edge_label(to_node, value)
+                    if self.graph_is_undirected and from_node in to_node.neighbors:
+                        to_node.set_edge_label(from_node, value)
+                self.ensure_labels_visible()
+                self.save_state()
+                self.render()
+        event.stopPropagation()
+
+    def on_ctx_delete_edge(self, event):
+        document['edge-context-menu'].style.display = 'none'
+        if self.context_edge:
+            self.delete_edge(self.context_edge[0], self.context_edge[1])
+        event.stopPropagation()
+
     def on_context_menu(self, event):
-        """Prevent context menu on right-click"""
+        """Show context menu on right-click over an edge"""
         event.preventDefault()
+        
+        # Check if right clicked an edge
+        x = event.clientX
+        y = event.clientY
+        edge = self.find_edge_at(x, y)
+        
+        context_menu = document['edge-context-menu']
+        if edge:
+            self.context_edge = edge
+            context_menu.style.display = 'block'
+            context_menu.style.left = f"{x}px"
+            context_menu.style.top = f"{y}px"
+        else:
+            context_menu.style.display = 'none'
+            self.context_edge = None
+            
         return False
     
     # ===== Search Algorithm Execution =====
@@ -2438,16 +2603,28 @@ class GraphVisualizer:
         
         # Restore nodes
         for name, node_data in state['nodes'].items():
-            node = Node(node_data['name'], node_data['x'], node_data['y'], node_data['heuristic'])
+            original_name = node_data.get('original_name', node_data['name'])
+            node = Node(original_name, node_data['x'], node_data['y'], node_data['heuristic'])
+            if 'original_name' in node_data and node_data['name'] != node_data['original_name']:
+                node.custom_name = node_data['name']
             node.state = node_data['state']
             self.nodes[int(name)] = node
         
-        # Restore edges
+        # Restore edges and labels
         for name, node_data in state['nodes'].items():
             node = self.nodes[int(name)]
-            for neighbor_name, weight in node_data['neighbors'].items():
+            
+            # Use original_neighbors if available for reliable mapping
+            neighbors_dict = node_data.get('original_neighbors', node_data['neighbors'])
+            for neighbor_name, weight in neighbors_dict.items():
                 neighbor = self.nodes[int(neighbor_name)]
                 node.add_neighbor(neighbor, weight)
+                
+            # Restore edge labels
+            labels_dict = node_data.get('original_edge_labels', node_data.get('edge_labels', {}))
+            for neighbor_name, label in labels_dict.items():
+                neighbor = self.nodes[int(neighbor_name)]
+                node.set_edge_label(neighbor, label)
         
         # Restore source and goals
         if state['source'] is not None:
