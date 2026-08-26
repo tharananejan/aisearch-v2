@@ -1246,6 +1246,7 @@ class GraphVisualizer:
                     self.add_edge(self.edge_start_node, node, 1)
                     self.edge_start_node = None
                     self.selected_node = None
+                    self.render()
 
         elif self.current_tool == 'delete-edge':
             edge = self.find_edge_at(x, y)
@@ -1263,6 +1264,7 @@ class GraphVisualizer:
             if value is not None:
                 try:
                     self.set_heuristic(node, value)
+                    timer.set_timeout(self.render, 50)
                 except:
                     alert('Invalid number')
                     
@@ -1276,6 +1278,7 @@ class GraphVisualizer:
                     try:
                         self.set_edge_weight(from_node, to_node, value)
                         self.ensure_labels_visible()
+                        timer.set_timeout(self.render, 50)
                     except:
                         alert('Invalid number')
         
@@ -1297,6 +1300,7 @@ class GraphVisualizer:
                     node.custom_name = new_name
                     self.save_state()
                     self.render()
+                    timer.set_timeout(self.render, 50)
         
         # Start panning on empty space (only for move-node tool, not add-node)
         # Don't enable panning for add-node to prevent unwanted pan mode after creating nodes
@@ -1654,6 +1658,7 @@ class GraphVisualizer:
                 self.ensure_labels_visible()
                 self.save_state()
                 self.render()
+                timer.set_timeout(self.render, 50)
         event.stopPropagation()
 
     def on_ctx_delete_edge(self, event):
