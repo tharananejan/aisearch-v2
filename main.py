@@ -2671,7 +2671,12 @@ class GraphVisualizer:
         self.goal_nodes = []
         
         # Load graph type (directed or undirected)
-        self.graph_is_undirected = data.get('metadata', {}).get('is_undirected', False)
+        # Preserve None if not present in metadata (means graph type not yet decided)
+        metadata = data.get('metadata', {})
+        if 'is_undirected' in metadata:
+            self.graph_is_undirected = metadata['is_undirected']
+        else:
+            self.graph_is_undirected = False
         mode_text = "UNDIRECTED" if self.graph_is_undirected else "DIRECTED"
         print(f'📊 Loaded graph type: {mode_text}')
         self.update_graph_type_indicator()  # Show the indicator
@@ -2687,8 +2692,8 @@ class GraphVisualizer:
             node = Node(self.node_counter, node_data['x'], node_data['y'], node_data['heuristic'])
             node.state = node_data.get('state', 'empty')
             
-            # Store custom name if it's not just a number
-            if isinstance(node_name, str) and not node_name.isdigit():
+            # Always store the display name as custom_name so it renders correctly
+            if isinstance(node_name, str):
                 node.custom_name = node_name
             elif isinstance(node_name, int):
                 node.custom_name = str(node_name)
@@ -2705,36 +2710,38 @@ class GraphVisualizer:
             
             self.node_counter += 1
         
-        # Load edges using the name mapping
+        # Helper to find a node by name with string/int fallback
+        def find_node(name):
+            node = name_to_node.get(name)
+            if not node and isinstance(name, str) and name.isdigit():
+                node = name_to_node.get(int(name))
+            elif not node and isinstance(name, int):
+                node = name_to_node.get(str(name))
+            return node
+        
+        # Load edges and edge labels using the name mapping
         for node_data in data['graph']['nodes']:
             node = name_to_node[node_data['name']]
+            
+            # Restore neighbor connections (edges with weights)
             for neighbor_name, weight in node_data.get('neighbors', {}).items():
-                # Try both string and int versions for neighbor lookup
-                neighbor = name_to_node.get(neighbor_name)
-                if not neighbor and isinstance(neighbor_name, str) and neighbor_name.isdigit():
-                    neighbor = name_to_node.get(int(neighbor_name))
-                elif not neighbor and isinstance(neighbor_name, int):
-                    neighbor = name_to_node.get(str(neighbor_name))
-                
+                neighbor = find_node(neighbor_name)
                 if neighbor:
                     node.add_neighbor(neighbor, weight)
+            
+            # Restore edge labels
+            for neighbor_name, label in node_data.get('edge_labels', {}).items():
+                neighbor = find_node(neighbor_name)
+                if neighbor:
+                    node.set_edge_label(neighbor, label)
         
         # Set source and goals using name mapping
         if data['graph']['source'] is not None:
             source = data['graph']['source']
-            self.source_node = name_to_node.get(source)
-            if not self.source_node and isinstance(source, str) and source.isdigit():
-                self.source_node = name_to_node.get(int(source))
-            elif not self.source_node and isinstance(source, int):
-                self.source_node = name_to_node.get(str(source))
+            self.source_node = find_node(source)
         
         for goal_name in data['graph'].get('goals', []):
-            goal_node = name_to_node.get(goal_name)
-            if not goal_node and isinstance(goal_name, str) and goal_name.isdigit():
-                goal_node = name_to_node.get(int(goal_name))
-            elif not goal_node and isinstance(goal_name, int):
-                goal_node = name_to_node.get(str(goal_name))
-            
+            goal_node = find_node(goal_name)
             if goal_node:
                 self.goal_nodes.append(goal_node)
         
