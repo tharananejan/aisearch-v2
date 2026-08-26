@@ -92,6 +92,17 @@ class GraphVisualizer:
         self.zoom = 1.0
         self.target_zoom = 1.0
         
+        # Load from cache if available
+        try:
+            cached = window.localStorage.getItem('aisearch_cached_graph')
+            if cached:
+                state = json.loads(cached)
+                self.restore_state(state)
+                self.undo_stack = []
+                self.redo_stack = []
+        except:
+            pass
+        
         # Initial render
         self.render()
         self.update_graph_stats()
@@ -2430,6 +2441,11 @@ class GraphVisualizer:
         self.graph_is_undirected = None  # Reset graph type
         self.update_graph_type_indicator()  # Hide the indicator
         
+        try:
+            window.localStorage.removeItem('aisearch_cached_graph')
+        except:
+            pass
+            
         self.clear_path(None)
         self.stop_search(None)
         
@@ -2566,9 +2582,15 @@ class GraphVisualizer:
             'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
             'node_counter': self.node_counter,
             'source': self.source_node.name if self.source_node else None,
-            'goals': [node.name for node in self.goal_nodes]
+            'goals': [node.name for node in self.goal_nodes],
+            'graph_is_undirected': self.graph_is_undirected
         }
         
+        try:
+            window.localStorage.setItem('aisearch_cached_graph', json.dumps(state))
+        except:
+            pass
+            
         self.undo_stack.append(json.dumps(state))
         self.redo_stack = []  # Clear redo stack on new action
         
@@ -2583,7 +2605,8 @@ class GraphVisualizer:
                 'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
                 'node_counter': self.node_counter,
                 'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes]
+                'goals': [node.name for node in self.goal_nodes],
+                'graph_is_undirected': self.graph_is_undirected
             })
             self.redo_stack.append(current)
             
@@ -2597,7 +2620,8 @@ class GraphVisualizer:
                 'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
                 'node_counter': self.node_counter,
                 'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes]
+                'goals': [node.name for node in self.goal_nodes],
+                'graph_is_undirected': self.graph_is_undirected
             })
             self.undo_stack.append(current)
             
@@ -2642,6 +2666,15 @@ class GraphVisualizer:
         
         self.goal_nodes = [self.nodes[name] for name in state['goals']]
         
+        if 'graph_is_undirected' in state:
+            self.graph_is_undirected = state['graph_is_undirected']
+            self.update_graph_type_indicator()
+            
+        try:
+            window.localStorage.setItem('aisearch_cached_graph', json.dumps(state))
+        except:
+            pass
+            
         self.render()
         self.update_graph_stats()
     
