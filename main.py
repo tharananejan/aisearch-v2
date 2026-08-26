@@ -86,13 +86,8 @@ class GraphVisualizer:
         # Set initial heuristic button state (disabled for BFS by default)
         self.on_algorithm_change(None)
         
-        # Reset view to center (fix any panning issues)
-        self.view_offset_x = 0
-        self.view_offset_y = 0
-        self.zoom = 1.0
-        self.target_zoom = 1.0
-        
         # Load from cache if available
+        self.cache_loaded = False
         try:
             cached = window.localStorage.getItem('aisearch_cached_graph')
             if cached:
@@ -100,6 +95,7 @@ class GraphVisualizer:
                 self.restore_state(state)
                 self.undo_stack = []
                 self.redo_stack = []
+                self.cache_loaded = True
         except:
             pass
         
@@ -107,11 +103,14 @@ class GraphVisualizer:
         self.render()
         self.update_graph_stats()
         
+        if not getattr(self, 'cache_loaded', False):
+            self.save_state()
+        
         # Initialize Lucide icons
         timer.set_timeout(lambda: self.safe_lucide_init(), 100)
         
-        # Force reset view after a short delay to ensure proper initialization
-        timer.set_timeout(lambda: self.force_reset_view(), 200)
+        # Force reset view after a short delay to ensure proper initialization (only if no cache)
+        timer.set_timeout(lambda: self.force_reset_view() if not getattr(self, 'cache_loaded', False) else None, 200)
         
     def resize_canvas(self):
         """Resize canvas to fit container with proper DPI scaling"""
@@ -1057,7 +1056,7 @@ class GraphVisualizer:
     def find_edge_at(self, x, y):
         """Find edge at screen position, considering bidirectional edge offsets"""
         world_x, world_y = self.screen_to_world(x, y)
-        threshold = 10
+        threshold = 10 / max(0.1, self.zoom)
         
         # Track closest edge
         closest_edge = None
@@ -1140,6 +1139,7 @@ class GraphVisualizer:
         
         # File operations
         document['btn-save-graph'].bind('click', self.save_graph)
+        document['btn-manual-cache'].bind('click', self.manual_cache)
         document['btn-load-graph'].bind('click', lambda e: document['file-input'].click())
         document['file-input'].bind('change', self.load_graph)
         document['btn-reset-canvas'].bind('click', self.reset_canvas)
@@ -1280,19 +1280,21 @@ class GraphVisualizer:
                         alert('Invalid number')
         
         elif self.current_tool == 'rename-node' and node:
-            new_name = window.prompt(f'Enter new name for node {node.name}:', str(node.name))
+            current_name = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
+            new_name = window.prompt(f'Enter new name for node {current_name}:', current_name)
             if new_name is not None and new_name.strip() != '':
                 new_name = new_name.strip()
                 # Check if name already exists
                 name_exists = False
                 for existing_node in self.nodes.values():
-                    if existing_node != node and str(existing_node.name) == new_name:
+                    existing_name = existing_node.custom_name if hasattr(existing_node, 'custom_name') else str(existing_node.name)
+                    if existing_node != node and existing_name == new_name:
                         alert(f'Node "{new_name}" already exists!')
                         name_exists = True
                         break
                 
                 if not name_exists:
-                    node.name = new_name
+                    node.custom_name = new_name
                     self.save_state()
                     self.render()
         
@@ -1358,6 +1360,17 @@ class GraphVisualizer:
         if self.is_modal_open():
             return
         
+        if self.current_tool == 'add-edge' and self.edge_start_node:
+            x = event.clientX
+            y = event.clientY
+            node = self.find_node_at(x, y)
+            
+            if node and node != self.edge_start_node:
+                self.add_edge(self.edge_start_node, node, 1)
+                self.edge_start_node = None
+                self.selected_node = None
+                self.render()
+                
         if self.dragging_node:
             self.save_state()
         
@@ -2255,7 +2268,10 @@ class GraphVisualizer:
                 'algorithm': document['algorithm-select'].value,
                 'node_count': len(self.nodes),
                 'edge_count': sum(len(node.neighbors) for node in self.nodes.values()),
-                'is_undirected': self.graph_is_undirected
+                'is_undirected': self.graph_is_undirected,
+                'view_offset_x': self.view_offset_x,
+                'view_offset_y': self.view_offset_y,
+                'zoom': self.zoom
             },
             'graph': {
                 'nodes': [node.to_dict() for node in self.nodes.values()],
@@ -2326,6 +2342,24 @@ class GraphVisualizer:
     def save_graph(self, event):
         """Save graph to JSON file"""
         self.export_json(None)
+
+    def manual_cache(self, event=None):
+        """Manually save the graph state to cache"""
+        try:
+            state = {
+                'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
+                'node_counter': self.node_counter,
+                'source': self.source_node.name if self.source_node else None,
+                'goals': [node.name for node in self.goal_nodes],
+                'graph_is_undirected': self.graph_is_undirected,
+                'view_offset_x': self.view_offset_x,
+                'view_offset_y': self.view_offset_y,
+                'zoom': self.zoom
+            }
+            window.localStorage.setItem('aisearch_cached_graph', json.dumps(state))
+            alert('Graph successfully cached to local storage!')
+        except Exception as e:
+            alert(f'Failed to cache graph: {str(e)}')
     
     def load_graph(self, event):
         """Load graph from JSON file"""
@@ -2426,6 +2460,14 @@ class GraphVisualizer:
             if goal_node:
                 self.goal_nodes.append(goal_node)
         
+        # Restore view if available
+        metadata = data.get('metadata', {})
+        if 'view_offset_x' in metadata:
+            self.view_offset_x = metadata['view_offset_x']
+            self.view_offset_y = metadata.get('view_offset_y', 0)
+            self.zoom = metadata.get('zoom', 1.0)
+            self.target_zoom = self.zoom
+            
         self.render()
         self.update_graph_stats()
     
@@ -2583,7 +2625,10 @@ class GraphVisualizer:
             'node_counter': self.node_counter,
             'source': self.source_node.name if self.source_node else None,
             'goals': [node.name for node in self.goal_nodes],
-            'graph_is_undirected': self.graph_is_undirected
+            'graph_is_undirected': self.graph_is_undirected,
+            'view_offset_x': self.view_offset_x,
+            'view_offset_y': self.view_offset_y,
+            'zoom': self.zoom
         }
         
         try:
@@ -2600,33 +2645,38 @@ class GraphVisualizer:
     
     def undo(self):
         """Undo last action"""
-        if len(self.undo_stack) > 0:
-            current = json.dumps({
-                'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
-                'node_counter': self.node_counter,
-                'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes],
-                'graph_is_undirected': self.graph_is_undirected
-            })
+        if len(self.undo_stack) > 1:
+            current = self.undo_stack.pop()
             self.redo_stack.append(current)
             
-            state = json.loads(self.undo_stack.pop())
+            previous = self.undo_stack[-1]
+            state = json.loads(previous)
             self.restore_state(state)
+            
+            try:
+                window.localStorage.setItem('aisearch_cached_graph', previous)
+            except:
+                pass
+                
+            self.render()
+            self.update_graph_stats()
     
     def redo(self):
         """Redo last undone action"""
         if len(self.redo_stack) > 0:
-            current = json.dumps({
-                'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
-                'node_counter': self.node_counter,
-                'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes],
-                'graph_is_undirected': self.graph_is_undirected
-            })
-            self.undo_stack.append(current)
+            next_state = self.redo_stack.pop()
+            self.undo_stack.append(next_state)
             
-            state = json.loads(self.redo_stack.pop())
+            state = json.loads(next_state)
             self.restore_state(state)
+            
+            try:
+                window.localStorage.setItem('aisearch_cached_graph', next_state)
+            except:
+                pass
+                
+            self.render()
+            self.update_graph_stats()
     
     def restore_state(self, state):
         """Restore graph state"""
@@ -2669,6 +2719,12 @@ class GraphVisualizer:
         if 'graph_is_undirected' in state:
             self.graph_is_undirected = state['graph_is_undirected']
             self.update_graph_type_indicator()
+            
+        if 'view_offset_x' in state:
+            self.view_offset_x = state['view_offset_x']
+            self.view_offset_y = state.get('view_offset_y', 0)
+            self.zoom = state.get('zoom', 1.0)
+            self.target_zoom = self.zoom
             
         try:
             window.localStorage.setItem('aisearch_cached_graph', json.dumps(state))
