@@ -1152,7 +1152,10 @@ class GraphVisualizer:
         document['btn-toggle-grid'].bind('click', self.toggle_grid)
         
         # Theme toggle
-        document['theme-toggle'].bind('click', self.toggle_theme)
+        try:
+            document['theme-toggle'].bind('click', self.toggle_theme)
+        except KeyError:
+            pass
 
         
         
@@ -1208,9 +1211,12 @@ class GraphVisualizer:
         y = event.clientY
         node = self.find_node_at(x, y)
         
-        if self.current_tool == 'add-node' and node is None:
-            world_x, world_y = self.screen_to_world(x, y)
-            self.add_node(world_x, world_y)
+        if self.current_tool == 'add-node':
+            if node is None:
+                world_x, world_y = self.screen_to_world(x, y)
+                self.add_node(world_x, world_y)
+            else:
+                self.dragging_node = node
             
         elif self.current_tool == 'move-node' and node:
             self.dragging_node = node
@@ -1321,7 +1327,7 @@ class GraphVisualizer:
             node = self.find_node_at(x, y)
             
             if node:
-                if self.current_tool == 'move-node':
+                if self.current_tool in ['move-node', 'add-node']:
                     self.canvas.style.cursor = 'grab'
                 elif self.current_tool in ['rename-node', 'edit-heuristic']:
                     self.canvas.style.cursor = 'text'
@@ -2534,17 +2540,19 @@ class GraphVisualizer:
     def toggle_theme(self, event):
         """Toggle dark mode"""
         document.body.classList.toggle('dark-mode')
-        btn = document['theme-toggle']
-        
-        # Get the icon element
-        icon = btn.select_one('[data-lucide]')
-        
-        if 'dark-mode' in document.body.classList:
-            # Switch to sun icon for dark mode
-            icon.setAttribute('data-lucide', 'sun')
-        else:
-            # Switch to moon icon for light mode
-            icon.setAttribute('data-lucide', 'moon')
+        try:
+            btn = document['theme-toggle']
+            # Get the icon element
+            icon = btn.select_one('[data-lucide]')
+            
+            if 'dark-mode' in document.body.classList:
+                # Switch to sun icon for dark mode
+                icon.setAttribute('data-lucide', 'sun')
+            else:
+                # Switch to moon icon for light mode
+                icon.setAttribute('data-lucide', 'moon')
+        except KeyError:
+            pass
         
         # Re-initialize Lucide icons
         self.safe_lucide_init()
