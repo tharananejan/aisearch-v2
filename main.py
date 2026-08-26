@@ -90,14 +90,18 @@ class GraphVisualizer:
         # Setup event listeners
         self.setup_event_listeners()
         
-        # Set initial heuristic button state (disabled for BFS by default)
-        self.on_algorithm_change(None)
+        # Try loading persisted state from localStorage
+        has_cached_state = self.load_from_storage()
         
-        # Reset view to center (fix any panning issues)
-        self.view_offset_x = 0
-        self.view_offset_y = 0
-        self.zoom = 1.0
-        self.target_zoom = 1.0
+        if not has_cached_state:
+            # Set initial heuristic button state (disabled for BFS by default)
+            self.on_algorithm_change(None)
+            
+            # Reset view to center (fix any panning issues)
+            self.view_offset_x = 0
+            self.view_offset_y = 0
+            self.zoom = 1.0
+            self.target_zoom = 1.0
         
         # Initial render
         self.render()
@@ -106,8 +110,9 @@ class GraphVisualizer:
         # Initialize Lucide icons
         timer.set_timeout(lambda: self.safe_lucide_init(), 100)
         
-        # Force reset view after a short delay to ensure proper initialization
-        timer.set_timeout(lambda: self.force_reset_view(), 200)
+        # Force reset view only if no saved state was restored
+        if not has_cached_state:
+            timer.set_timeout(lambda: self.force_reset_view(), 200)
         
     def resize_canvas(self):
         """Resize canvas to fit container with proper DPI scaling"""
@@ -1364,6 +1369,7 @@ class GraphVisualizer:
         # Algorithm selection
         document['algorithm-select'].bind('change', self.on_algorithm_change)
         document['graph-type-select'].bind('change', self.on_graph_type_change)
+        document['depth-limit'].bind('input', lambda e: self.save_to_storage())
         
         # Animation controls
         document['btn-start'].bind('click', self.start_search)
@@ -1648,6 +1654,8 @@ class GraphVisualizer:
             self.save_state()
         if self.dragging_annotation:
             self.save_state()
+        if self.is_panning:
+            self.save_to_storage()
         
         self.dragging_node = None
         self.dragging_annotation = None
@@ -1682,6 +1690,7 @@ class GraphVisualizer:
         self.view_offset_y = mouse_canvas_y - (world_y * new_zoom)
         
         self.zoom = new_zoom
+        self.save_to_storage()
         self.render()
     
     def on_key_down(self, event):
@@ -1884,6 +1893,7 @@ class GraphVisualizer:
             info_panel.style.display = 'none'
         
         # Re-render to update visible weights/heuristics
+        self.save_to_storage()
         self.render()
         
         # Re-initialize Lucide icons
@@ -1893,6 +1903,7 @@ class GraphVisualizer:
         """Handle animation speed change"""
         self.animation_speed = int(document['speed-slider'].value)
         document['speed-value'].textContent = f'{self.animation_speed}x'
+        self.save_to_storage()
     
     def on_resize(self):
         """Handle window resize"""
@@ -2759,6 +2770,7 @@ class GraphVisualizer:
             self.text_annotations.append(annotation)
             self.annotation_counter += 1
         
+        self.save_to_storage()
         self.render()
         self.update_graph_stats()
     
@@ -2779,6 +2791,8 @@ class GraphVisualizer:
         self.clear_path(None)
         self.stop_search(None)
         
+        self.clear_cached_storage()
+        self.save_to_storage()
         self.render()
         self.update_graph_stats()
     
@@ -2798,6 +2812,7 @@ class GraphVisualizer:
         self.view_offset_x += (world_x_after - world_x_before) * self.zoom
         self.view_offset_y += (world_y_after - world_y_before) * self.zoom
         
+        self.save_to_storage()
         self.render()
     
     def reset_view(self, event):
@@ -2806,6 +2821,7 @@ class GraphVisualizer:
         self.target_zoom = 1.0
         self.view_offset_x = 0
         self.view_offset_y = 0
+        self.save_to_storage()
         self.render()
     
     def force_reset_view(self):
@@ -2819,7 +2835,6 @@ class GraphVisualizer:
     def toggle_labels(self, event):
         """Toggle heuristic labels"""
         self.show_labels = not self.show_labels
-        self.render()
         
         # Update button state
         btn = document['btn-toggle-labels']
@@ -2827,6 +2842,9 @@ class GraphVisualizer:
             btn.classList.add('active')
         else:
             btn.classList.remove('active')
+        
+        self.save_to_storage()
+        self.render()
 
     def on_graph_type_change(self, event):
         """Handle graph type dropdown change"""
@@ -2865,6 +2883,7 @@ class GraphVisualizer:
         
         self.graph_is_undirected = new_type
         self.update_graph_type_indicator()
+        self.save_to_storage()
         self.render()
         
         mode = "UNDIRECTED" if self.graph_is_undirected else "DIRECTED"
@@ -2881,6 +2900,7 @@ class GraphVisualizer:
     def toggle_grid(self, event):
         """Toggle grid background"""
         self.show_grid = not self.show_grid
+        self.save_to_storage()
         self.render()
     
     def toggle_theme(self, event):
@@ -2902,12 +2922,226 @@ class GraphVisualizer:
         
         # Re-initialize Lucide icons
         self.safe_lucide_init()
+        self.save_to_storage()
         self.render()
     
+    # ===== LocalStorage Persistence (Caching) =====
+
+    def get_full_state_dict(self):
+        """Serialize complete visualizer state into a dictionary for caching"""
+        algorithm = 'bfs'
+        try:
+            algorithm = document['algorithm-select'].value
+        except Exception:
+            pass
+
+        depth_limit = 5
+        try:
+            depth_limit = int(document['depth-limit'].value)
+        except Exception:
+            pass
+
+        theme = 'dark' if 'dark-mode' in document.body.classList else 'light'
+
+        return {
+            'version': '2.0',
+            'nodes': {str(name): node.to_dict() for name, node in self.nodes.items()},
+            'node_counter': self.node_counter,
+            'source': self.source_node.name if self.source_node else None,
+            'goals': [node.name for node in self.goal_nodes],
+            'text_annotations': [dict(ann) for ann in self.text_annotations],
+            'annotation_counter': self.annotation_counter,
+            'graph_is_undirected': self.graph_is_undirected,
+            'view_offset_x': self.view_offset_x,
+            'view_offset_y': self.view_offset_y,
+            'zoom': self.zoom,
+            'show_labels': self.show_labels,
+            'show_grid': self.show_grid,
+            'algorithm': algorithm,
+            'depth_limit': depth_limit,
+            'animation_speed': self.animation_speed,
+            'theme': theme
+        }
+
+    def save_to_storage(self):
+        """Persist visualizer state to browser localStorage"""
+        try:
+            data = self.get_full_state_dict()
+            json_str = json.dumps(data)
+            storage['aisearch_state'] = json_str
+        except Exception as e:
+            print(f'Error saving state to localStorage: {e}')
+
+    def load_from_storage(self):
+        """Load persisted visualizer state from browser localStorage if available"""
+        try:
+            if 'aisearch_state' not in storage:
+                return False
+
+            raw = storage['aisearch_state']
+            if not raw:
+                return False
+
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return False
+
+            # Restore graph data (nodes, edges, source, goals, annotations)
+            self.nodes = {}
+            self.node_counter = data.get('node_counter', 0)
+
+            # Restore nodes
+            nodes_data = data.get('nodes', {})
+            for name_str, node_data in nodes_data.items():
+                original_name = node_data.get('original_name', node_data['name'])
+                node = Node(original_name, node_data['x'], node_data['y'], node_data['heuristic'])
+                if 'original_name' in node_data and node_data['name'] != node_data['original_name']:
+                    node.custom_name = node_data['name']
+                elif isinstance(node_data.get('name'), str):
+                    node.custom_name = node_data['name']
+                node.state = node_data.get('state', 'empty')
+                try:
+                    node_key = int(name_str)
+                except ValueError:
+                    node_key = name_str
+                self.nodes[node_key] = node
+
+            # Helper for node lookup
+            def get_cached_node(k):
+                if k in self.nodes:
+                    return self.nodes[k]
+                try:
+                    if int(k) in self.nodes:
+                        return self.nodes[int(k)]
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    if str(k) in self.nodes:
+                        return self.nodes[str(k)]
+                except Exception:
+                    pass
+                return None
+
+            # Restore edges and labels
+            for name_str, node_data in nodes_data.items():
+                node = get_cached_node(name_str)
+                if not node:
+                    continue
+
+                neighbors_dict = node_data.get('original_neighbors', node_data.get('neighbors', {}))
+                for neighbor_name, weight in neighbors_dict.items():
+                    neighbor = get_cached_node(neighbor_name)
+                    if neighbor:
+                        node.add_neighbor(neighbor, weight)
+
+                labels_dict = node_data.get('original_edge_labels', node_data.get('edge_labels', {}))
+                for neighbor_name, label in labels_dict.items():
+                    neighbor = get_cached_node(neighbor_name)
+                    if neighbor:
+                        node.set_edge_label(neighbor, label)
+
+            # Restore source and goals
+            source_id = data.get('source')
+            if source_id is not None:
+                self.source_node = get_cached_node(source_id)
+            else:
+                self.source_node = None
+
+            self.goal_nodes = []
+            for goal_id in data.get('goals', []):
+                g_node = get_cached_node(goal_id)
+                if g_node:
+                    self.goal_nodes.append(g_node)
+
+            # Restore text annotations
+            self.text_annotations = data.get('text_annotations', [])
+            self.annotation_counter = data.get('annotation_counter', len(self.text_annotations))
+
+            # Restore graph type (directed / undirected)
+            self.graph_is_undirected = data.get('graph_is_undirected', None)
+            self.update_graph_type_indicator()
+
+            # Restore view transform
+            self.view_offset_x = float(data.get('view_offset_x', 0))
+            self.view_offset_y = float(data.get('view_offset_y', 0))
+            self.zoom = float(data.get('zoom', 1.0))
+            self.target_zoom = self.zoom
+
+            # Restore display toggles
+            self.show_labels = data.get('show_labels', True)
+            try:
+                btn_labels = document['btn-toggle-labels']
+                if self.show_labels:
+                    btn_labels.classList.add('active')
+                else:
+                    btn_labels.classList.remove('active')
+            except KeyError:
+                pass
+
+            self.show_grid = data.get('show_grid', True)
+
+            # Restore algorithm selection
+            saved_algo = data.get('algorithm', 'bfs')
+            try:
+                document['algorithm-select'].value = saved_algo
+                self.on_algorithm_change(None)
+            except Exception:
+                pass
+
+            # Restore depth limit
+            saved_depth = data.get('depth_limit', 5)
+            try:
+                document['depth-limit'].value = str(saved_depth)
+            except Exception:
+                pass
+
+            # Restore animation speed
+            saved_speed = data.get('animation_speed', 5)
+            self.animation_speed = int(saved_speed)
+            try:
+                document['speed-slider'].value = str(self.animation_speed)
+                document['speed-value'].textContent = f'{self.animation_speed}x'
+            except Exception:
+                pass
+
+            # Restore theme
+            saved_theme = data.get('theme', 'dark')
+            if saved_theme == 'dark':
+                document.body.classList.add('dark-mode')
+                try:
+                    btn = document['theme-toggle']
+                    icon = btn.select_one('[data-lucide]')
+                    if icon:
+                        icon.setAttribute('data-lucide', 'sun')
+                except Exception:
+                    pass
+            else:
+                document.body.classList.remove('dark-mode')
+                try:
+                    btn = document['theme-toggle']
+                    icon = btn.select_one('[data-lucide]')
+                    if icon:
+                        icon.setAttribute('data-lucide', 'moon')
+                except Exception:
+                    pass
+
+            return True
+        except Exception as e:
+            print(f'Error loading state from localStorage: {e}')
+            return False
+
+    def clear_cached_storage(self):
+        """Remove state from browser localStorage"""
+        try:
+            if 'aisearch_state' in storage:
+                del storage['aisearch_state']
+        except Exception as e:
+            print(f'Error clearing storage: {e}')
+
     # ===== Undo/Redo =====
     
     def save_state(self):
-        """Save current state for undo"""
+        """Save current state for undo and auto-cache to storage"""
         state = {
             'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
             'node_counter': self.node_counter,
@@ -2923,6 +3157,9 @@ class GraphVisualizer:
         # Limit undo stack size
         if len(self.undo_stack) > 50:
             self.undo_stack.pop(0)
+
+        # Auto-persist to localStorage
+        self.save_to_storage()
     
     def undo(self):
         """Undo last action"""
@@ -2998,6 +3235,7 @@ class GraphVisualizer:
         self.text_annotations = state.get('text_annotations', [])
         self.annotation_counter = state.get('annotation_counter', 0)
         
+        self.save_to_storage()
         self.render()
         self.update_graph_stats()
     
@@ -3129,6 +3367,7 @@ class GraphVisualizer:
             self.nodes[i].add_neighbor(self.nodes[i + 1], 1)
         
         self.node_counter = len(positions)
+        self.save_state()
         self.render()
         self.update_graph_stats()
     
@@ -3163,6 +3402,7 @@ class GraphVisualizer:
             self.nodes[from_idx].add_neighbor(self.nodes[to_idx], 1)
         
         self.node_counter = len(positions)
+        self.save_state()
         self.render()
         self.update_graph_stats()
     
@@ -3205,6 +3445,7 @@ class GraphVisualizer:
                     self.nodes[idx].add_neighbor(self.nodes[idx + cols], 1)
         
         self.node_counter = rows * cols
+        self.save_state()
         self.render()
         self.update_graph_stats()
     
@@ -3236,6 +3477,7 @@ class GraphVisualizer:
             self.nodes[from_idx].add_neighbor(self.nodes[to_idx], weight)
         
         self.node_counter = len(positions)
+        self.save_state()
         self.render()
         self.update_graph_stats()
 
