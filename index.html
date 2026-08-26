@@ -107,6 +107,9 @@
                         <button id="tool-rename-node" class="btn-tool" title="Rename Node (N)">
                             <i data-lucide="type"></i> Rename Node
                         </button>
+                        <button id="tool-add-text" class="btn-tool" title="Add Text (T)">
+                            <i data-lucide="text"></i> Add Text
+                        </button>
                     </div>
                 </div>
 
@@ -412,6 +415,35 @@
                 </button>
                 <button id="modal-btn-node-ok" class="btn-primary" style="padding: 10px 20px;">
                     <i data-lucide="check"></i> Create Node
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Text Annotation Modal -->
+    <div id="text-annotation-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 450px;">
+            <h2 style="margin-top: 0; display: flex; align-items: center; gap: 10px;">
+                <i data-lucide="text" style="width: 24px; height: 24px;"></i>
+                <span id="text-annotation-modal-title">Add Text Annotation</span>
+            </h2>
+            <p style="margin: 16px 0 12px 0; line-height: 1.6; color: var(--text-secondary);">
+                Enter text to place on the canvas:
+            </p>
+            <textarea id="text-annotation-input" class="input-field"
+                style="width: 100%; padding: 10px; font-size: 14px; margin-bottom: 12px; min-height: 80px; resize: vertical; font-family: inherit;"
+                placeholder="Type your annotation here..."></textarea>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <label style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">Font Size:</label>
+                <input type="range" id="text-annotation-size" min="10" max="36" value="16" class="slider" style="flex: 1;">
+                <span id="text-annotation-size-value" style="font-size: 13px; color: var(--text-secondary); min-width: 30px;">16px</span>
+            </div>
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button id="modal-btn-text-cancel" class="btn-secondary" style="padding: 10px 20px;">
+                    <i data-lucide="x"></i> Cancel
+                </button>
+                <button id="modal-btn-text-ok" class="btn-primary" style="padding: 10px 20px;">
+                    <i data-lucide="check"></i> Place Text
                 </button>
             </div>
         </div>

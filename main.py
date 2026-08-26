@@ -80,6 +80,13 @@ class GraphVisualizer:
         self.undo_stack = []
         self.redo_stack = []
         
+        # Text annotations (draw.io style text areas)
+        self.text_annotations = []  # [{id, x, y, text, font_size, width, height}]
+        self.annotation_counter = 0
+        self.dragging_annotation = None
+        self.editing_annotation_id = None  # ID of annotation being edited
+        self.pending_annotation_position = None  # Store position when modal is shown
+        
         # Setup event listeners
         self.setup_event_listeners()
         
@@ -201,6 +208,10 @@ class GraphVisualizer:
         if self.show_labels:
             for node in self.nodes.values():
                 self.draw_node_label(node)
+        
+        # Draw text annotations
+        for annotation in self.text_annotations:
+            self.draw_annotation(annotation)
         
         # Restore context (removes pan/zoom, keeps DPI scale)
         self.ctx.restore()
@@ -833,9 +844,11 @@ class GraphVisualizer:
         """Check if any modal is currently open"""
         graph_type_modal = document['graph-type-modal']
         node_name_modal = document['node-name-modal']
+        text_annotation_modal = document['text-annotation-modal']
         
         return (graph_type_modal.style.display == 'flex' or 
-                node_name_modal.style.display == 'flex')
+                node_name_modal.style.display == 'flex' or
+                text_annotation_modal.style.display == 'flex')
     
     def show_node_name_modal(self):
         """Show modal to enter node name"""
@@ -914,7 +927,240 @@ class GraphVisualizer:
         elif event.key == 'Escape' or event.keyCode == 27:
             event.preventDefault()
             self.cancel_node_creation()
+    
+    # ===== Text Annotation Methods =====
+    
+    def show_text_annotation_modal(self, annotation=None):
+        """Show modal to enter/edit text annotation"""
+        modal = document['text-annotation-modal']
+        input_field = document['text-annotation-input']
+        size_slider = document['text-annotation-size']
+        size_value = document['text-annotation-size-value']
+        title = document['text-annotation-modal-title']
+        ok_btn = document['modal-btn-text-ok']
         
+        if annotation:
+            # Editing existing annotation
+            self.editing_annotation_id = annotation['id']
+            input_field.value = annotation['text']
+            size_slider.value = str(annotation.get('font_size', 16))
+            size_value.textContent = f"{annotation.get('font_size', 16)}px"
+            title.textContent = 'Edit Text Annotation'
+            ok_btn.innerHTML = '<i data-lucide="check"></i> Update Text'
+        else:
+            # Creating new annotation
+            self.editing_annotation_id = None
+            input_field.value = ''
+            size_slider.value = '16'
+            size_value.textContent = '16px'
+            title.textContent = 'Add Text Annotation'
+            ok_btn.innerHTML = '<i data-lucide="check"></i> Place Text'
+        
+        modal.style.display = 'flex'
+        timer.set_timeout(lambda: input_field.focus(), 100)
+        
+        # Bind size slider update
+        def update_size_display(e):
+            size_value.textContent = f"{size_slider.value}px"
+        size_slider.bind('input', update_size_display)
+        
+        self.safe_lucide_init()
+    
+    def hide_text_annotation_modal(self):
+        """Hide text annotation modal"""
+        modal = document['text-annotation-modal']
+        modal.style.display = 'none'
+        self.editing_annotation_id = None
+    
+    def create_text_annotation(self, event=None):
+        """Create or update text annotation from modal"""
+        input_field = document['text-annotation-input']
+        size_slider = document['text-annotation-size']
+        text = input_field.value.strip()
+        
+        if text == '':
+            self.hide_text_annotation_modal()
+            return
+        
+        font_size = int(size_slider.value)
+        
+        if self.editing_annotation_id is not None:
+            # Update existing annotation
+            for ann in self.text_annotations:
+                if ann['id'] == self.editing_annotation_id:
+                    ann['text'] = text
+                    ann['font_size'] = font_size
+                    break
+        else:
+            # Create new annotation
+            if not self.pending_annotation_position:
+                self.hide_text_annotation_modal()
+                return
+            
+            x, y = self.pending_annotation_position
+            self.pending_annotation_position = None
+            
+            annotation = {
+                'id': self.annotation_counter,
+                'x': x,
+                'y': y,
+                'text': text,
+                'font_size': font_size
+            }
+            self.text_annotations.append(annotation)
+            self.annotation_counter += 1
+        
+        self.save_state()
+        self.render()
+        self.hide_text_annotation_modal()
+    
+    def cancel_text_annotation(self, event=None):
+        """Cancel text annotation creation/editing"""
+        self.pending_annotation_position = None
+        self.editing_annotation_id = None
+        self.hide_text_annotation_modal()
+    
+    def on_text_annotation_keypress(self, event):
+        """Handle Escape key in text annotation input"""
+        if event.key == 'Escape' or event.keyCode == 27:
+            event.preventDefault()
+            self.cancel_text_annotation()
+    
+    def find_annotation_at(self, screen_x, screen_y):
+        """Find text annotation at screen position"""
+        world_x, world_y = self.screen_to_world(screen_x, screen_y)
+        
+        for annotation in reversed(self.text_annotations):
+            # Calculate text bounds
+            text = annotation['text']
+            font_size = annotation.get('font_size', 16)
+            lines = text.split('\n')
+            
+            # Estimate text width
+            max_line_width = max(len(line) * font_size * 0.6 for line in lines) if lines else 0
+            text_height = len(lines) * (font_size * 1.4)
+            
+            padding = 10
+            half_w = max_line_width / 2 + padding
+            half_h = text_height / 2 + padding
+            
+            ax, ay = annotation['x'], annotation['y']
+            
+            if (ax - half_w <= world_x <= ax + half_w and
+                ay - half_h <= world_y <= ay + half_h):
+                return annotation
+        
+        return None
+    
+    def delete_annotation(self, annotation_id):
+        """Delete a text annotation by ID"""
+        self.text_annotations = [a for a in self.text_annotations if a['id'] != annotation_id]
+    
+    def draw_annotation(self, annotation):
+        """Draw a text annotation on the canvas"""
+        text = annotation['text']
+        font_size = annotation.get('font_size', 16)
+        x, y = annotation['x'], annotation['y']
+        lines = text.split('\n')
+        
+        line_height = font_size * 1.4
+        
+        # Measure text width
+        self.ctx.font = f'{font_size}px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+        max_line_width = 0
+        for line in lines:
+            w = self.ctx.measureText(line).width
+            if w > max_line_width:
+                max_line_width = w
+        
+        total_height = len(lines) * line_height
+        padding = 10
+        
+        # Draw background
+        bg_x = x - max_line_width / 2 - padding
+        bg_y = y - total_height / 2 - padding
+        bg_w = max_line_width + padding * 2
+        bg_h = total_height + padding * 2
+        
+        # Semi-transparent background with border
+        if 'dark-mode' in document.body.classList:
+            self.ctx.fillStyle = 'rgba(30, 30, 30, 0.85)'
+            border_color = 'rgba(100, 100, 100, 0.5)'
+            text_color = '#e5e7eb'
+        else:
+            self.ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+            border_color = 'rgba(0, 0, 0, 0.15)'
+            text_color = '#1f2937'
+        
+        # Rounded rectangle background
+        radius = 6
+        self.ctx.beginPath()
+        self.ctx.moveTo(bg_x + radius, bg_y)
+        self.ctx.lineTo(bg_x + bg_w - radius, bg_y)
+        self.ctx.arcTo(bg_x + bg_w, bg_y, bg_x + bg_w, bg_y + radius, radius)
+        self.ctx.lineTo(bg_x + bg_w, bg_y + bg_h - radius)
+        self.ctx.arcTo(bg_x + bg_w, bg_y + bg_h, bg_x + bg_w - radius, bg_y + bg_h, radius)
+        self.ctx.lineTo(bg_x + radius, bg_y + bg_h)
+        self.ctx.arcTo(bg_x, bg_y + bg_h, bg_x, bg_y + bg_h - radius, radius)
+        self.ctx.lineTo(bg_x, bg_y + radius)
+        self.ctx.arcTo(bg_x, bg_y, bg_x + radius, bg_y, radius)
+        self.ctx.closePath()
+        self.ctx.fill()
+        
+        # Border
+        self.ctx.strokeStyle = border_color
+        self.ctx.lineWidth = 1.5
+        self.ctx.stroke()
+        
+        # Draw text lines
+        self.ctx.fillStyle = text_color
+        self.ctx.font = f'{font_size}px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+        self.ctx.textAlign = 'center'
+        self.ctx.textBaseline = 'middle'
+        
+        start_y = y - (total_height / 2) + (line_height / 2)
+        for i, line in enumerate(lines):
+            self.ctx.fillText(line, x, start_y + i * line_height)
+    
+    def draw_annotation_on_context(self, ctx, annotation):
+        """Draw a text annotation on a specific context (for export)"""
+        text = annotation['text']
+        font_size = annotation.get('font_size', 16)
+        x, y = annotation['x'], annotation['y']
+        lines = text.split('\n')
+        
+        line_height = font_size * 1.4
+        
+        ctx.font = f'{font_size}px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+        max_line_width = 0
+        for line in lines:
+            w = ctx.measureText(line).width
+            if w > max_line_width:
+                max_line_width = w
+        
+        total_height = len(lines) * line_height
+        padding = 10
+        
+        bg_x = x - max_line_width / 2 - padding
+        bg_y = y - total_height / 2 - padding
+        bg_w = max_line_width + padding * 2
+        bg_h = total_height + padding * 2
+        
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+        ctx.fillRect(bg_x, bg_y, bg_w, bg_h)
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)'
+        ctx.lineWidth = 1.5
+        ctx.strokeRect(bg_x, bg_y, bg_w, bg_h)
+        
+        ctx.fillStyle = '#1f2937'
+        ctx.font = f'{font_size}px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        
+        start_y = y - (total_height / 2) + (line_height / 2)
+        for i, line in enumerate(lines):
+            ctx.fillText(line, x, start_y + i * line_height)
+    
     def delete_node(self, node):
         """Delete a node and its edges"""
         if node is None:
@@ -1110,7 +1356,7 @@ class GraphVisualizer:
         
         # Tool buttons
         tools = ['add-node', 'add-edge', 'move-node', 'delete-node', 
-                'delete-edge', 'set-source', 'set-goal', 'edit-heuristic', 'edit-weight', 'rename-node']
+                'delete-edge', 'set-source', 'set-goal', 'edit-heuristic', 'edit-weight', 'rename-node', 'add-text']
         for tool in tools:
             btn = document[f'tool-{tool}']
             btn.bind('click', lambda e, t=tool: self.select_tool(t))
@@ -1167,6 +1413,11 @@ class GraphVisualizer:
         document['modal-btn-node-ok'].bind('click', self.create_node_with_name)
         document['modal-btn-node-cancel'].bind('click', self.cancel_node_creation)
         document['node-name-input'].bind('keypress', self.on_node_name_keypress)
+        
+        # Text annotation modal buttons
+        document['modal-btn-text-ok'].bind('click', self.create_text_annotation)
+        document['modal-btn-text-cancel'].bind('click', self.cancel_text_annotation)
+        document['text-annotation-input'].bind('keydown', self.on_text_annotation_keypress)
         
         # Example graphs
         document['example-simple'].bind('click', lambda e: self.load_example('simple'))
@@ -1269,28 +1520,56 @@ class GraphVisualizer:
                         alert('Invalid number')
         
         elif self.current_tool == 'rename-node' and node:
-            new_name = window.prompt(f'Enter new name for node {node.name}:', str(node.name))
+            # Use custom_name for display, not the numeric ID (node.name)
+            current_display = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
+            new_name = window.prompt(f'Enter new name for node {current_display}:', current_display)
             if new_name is not None and new_name.strip() != '':
                 new_name = new_name.strip()
-                # Check if name already exists
+                # Check if name already exists (check custom_name of other nodes)
                 name_exists = False
                 for existing_node in self.nodes.values():
-                    if existing_node != node and str(existing_node.name) == new_name:
-                        alert(f'Node "{new_name}" already exists!')
-                        name_exists = True
-                        break
+                    if existing_node != node:
+                        existing_display = existing_node.custom_name if hasattr(existing_node, 'custom_name') else str(existing_node.name)
+                        if existing_display == new_name:
+                            alert(f'Node "{new_name}" already exists!')
+                            name_exists = True
+                            break
                 
                 if not name_exists:
-                    node.name = new_name
+                    node.custom_name = new_name
                     self.save_state()
                     self.render()
+        
+        elif self.current_tool == 'add-text':
+            if node is None:
+                # Check if clicking an annotation for editing
+                annotation = self.find_annotation_at(x, y)
+                if annotation:
+                    self.show_text_annotation_modal(annotation)
+                else:
+                    world_x, world_y = self.screen_to_world(x, y)
+                    self.pending_annotation_position = (world_x, world_y)
+                    self.show_text_annotation_modal()
         
         # Start panning on empty space (only for move-node tool, not add-node)
         # Don't enable panning for add-node to prevent unwanted pan mode after creating nodes
         if node is None and self.current_tool == 'move-node':
-            self.is_panning = True
-            self.pan_start_x = x
-            self.pan_start_y = y
+            # Check if we're clicking an annotation to drag it
+            annotation = self.find_annotation_at(x, y)
+            if annotation:
+                self.dragging_annotation = annotation
+            else:
+                self.is_panning = True
+                self.pan_start_x = x
+                self.pan_start_y = y
+        
+        # Delete annotation with delete-node tool
+        if node is None and self.current_tool == 'delete-node':
+            annotation = self.find_annotation_at(x, y)
+            if annotation:
+                self.delete_annotation(annotation['id'])
+                self.save_state()
+                self.render()
     
     def on_mouse_move(self, event):
         """Handle mouse move on canvas"""
@@ -1316,6 +1595,12 @@ class GraphVisualizer:
             
             self.render()
             
+        elif self.dragging_annotation:
+            world_x, world_y = self.screen_to_world(x, y)
+            self.dragging_annotation['x'] = world_x
+            self.dragging_annotation['y'] = world_y
+            self.render()
+            
         elif self.dragging_node:
             world_x, world_y = self.screen_to_world(x, y)
             self.dragging_node.x = world_x
@@ -1325,6 +1610,7 @@ class GraphVisualizer:
         else:
             # Update cursor based on hover
             node = self.find_node_at(x, y)
+            annotation = self.find_annotation_at(x, y)
             
             if node:
                 if self.current_tool in ['move-node', 'add-node']:
@@ -1333,8 +1619,19 @@ class GraphVisualizer:
                     self.canvas.style.cursor = 'text'
                 else:
                     self.canvas.style.cursor = 'pointer'
+            elif annotation:
+                if self.current_tool == 'move-node':
+                    self.canvas.style.cursor = 'grab'
+                elif self.current_tool == 'add-text':
+                    self.canvas.style.cursor = 'text'
+                elif self.current_tool == 'delete-node':
+                    self.canvas.style.cursor = 'pointer'
+                else:
+                    self.canvas.style.cursor = 'default'
             else:
                 if self.current_tool == 'add-node':
+                    self.canvas.style.cursor = 'crosshair'
+                elif self.current_tool == 'add-text':
                     self.canvas.style.cursor = 'crosshair'
                 elif self.current_tool == 'delete-node':
                     self.canvas.style.cursor = 'not-allowed'
@@ -1349,8 +1646,11 @@ class GraphVisualizer:
         
         if self.dragging_node:
             self.save_state()
+        if self.dragging_annotation:
+            self.save_state()
         
         self.dragging_node = None
+        self.dragging_annotation = None
         self.is_panning = False
         self.mouse_down_button = -1
         
@@ -1421,6 +1721,8 @@ class GraphVisualizer:
                 self.select_tool('edit-weight')
             elif key == 'n':
                 self.select_tool('rename-node')
+            elif key == 't':
+                self.select_tool('add-text')
             elif key == ' ':
                 event.preventDefault()
                 if self.is_animating:
@@ -1442,7 +1744,7 @@ class GraphVisualizer:
         
         # Update button states
         tools = ['add-node', 'add-edge', 'move-node', 'delete-node', 
-                'delete-edge', 'set-source', 'set-goal', 'edit-heuristic', 'edit-weight', 'rename-node']
+                'delete-edge', 'set-source', 'set-goal', 'edit-heuristic', 'edit-weight', 'rename-node', 'add-text']
         for t in tools:
             btn = document[f'tool-{t}']
             if t == tool:
@@ -2228,9 +2530,29 @@ class GraphVisualizer:
         }
         
         for node in self.nodes.values():
+            display_name = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
             color = colors.get(node.state, '#ffffff')
             svg += f'  <circle cx="{node.x}" cy="{node.y}" r="20" fill="{color}" stroke="#374151" stroke-width="2"/>\n'
-            svg += f'  <text x="{node.x}" y="{node.y}" text-anchor="middle" dominant-baseline="middle" font-size="14">{node.name}</text>\n'
+            svg += f'  <text x="{node.x}" y="{node.y}" text-anchor="middle" dominant-baseline="middle" font-size="14">{display_name}</text>\n'
+        
+        # Add text annotations
+        for annotation in self.text_annotations:
+            ax, ay = annotation['x'], annotation['y']
+            text = annotation['text']
+            font_size = annotation.get('font_size', 16)
+            lines = text.split('\n')
+            line_height = font_size * 1.4
+            total_height = len(lines) * line_height
+            max_line_width = max(len(line) * font_size * 0.6 for line in lines) if lines else 0
+            padding = 10
+            bg_x = ax - max_line_width / 2 - padding
+            bg_y = ay - total_height / 2 - padding
+            bg_w = max_line_width + padding * 2
+            bg_h = total_height + padding * 2
+            svg += f'  <rect x="{bg_x}" y="{bg_y}" width="{bg_w}" height="{bg_h}" fill="rgba(255,255,255,0.9)" stroke="rgba(0,0,0,0.15)" stroke-width="1.5" rx="6"/>\n'
+            start_y = ay - (total_height / 2) + (line_height / 2)
+            for i, line in enumerate(lines):
+                svg += f'  <text x="{ax}" y="{start_y + i * line_height}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="#1f2937">{line}</text>\n'
         
         svg += '</svg>'
         return svg
@@ -2249,7 +2571,8 @@ class GraphVisualizer:
             'graph': {
                 'nodes': [node.to_dict() for node in self.nodes.values()],
                 'source': (self.source_node.custom_name if hasattr(self.source_node, 'custom_name') else self.source_node.name) if self.source_node else None,
-                'goals': [node.custom_name if hasattr(node, 'custom_name') else node.name for node in self.goal_nodes]
+                'goals': [node.custom_name if hasattr(node, 'custom_name') else node.name for node in self.goal_nodes],
+                'text_annotations': [dict(ann) for ann in self.text_annotations]
             }
         }
         
@@ -2415,6 +2738,20 @@ class GraphVisualizer:
             if goal_node:
                 self.goal_nodes.append(goal_node)
         
+        # Load text annotations
+        self.text_annotations = []
+        self.annotation_counter = 0
+        for ann_data in data['graph'].get('text_annotations', []):
+            annotation = {
+                'id': self.annotation_counter,
+                'x': ann_data['x'],
+                'y': ann_data['y'],
+                'text': ann_data['text'],
+                'font_size': ann_data.get('font_size', 16)
+            }
+            self.text_annotations.append(annotation)
+            self.annotation_counter += 1
+        
         self.render()
         self.update_graph_stats()
     
@@ -2427,6 +2764,8 @@ class GraphVisualizer:
         self.node_counter = 0
         self.source_node = None
         self.goal_nodes = []
+        self.text_annotations = []
+        self.annotation_counter = 0
         self.graph_is_undirected = None  # Reset graph type
         self.update_graph_type_indicator()  # Hide the indicator
         
@@ -2566,7 +2905,9 @@ class GraphVisualizer:
             'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
             'node_counter': self.node_counter,
             'source': self.source_node.name if self.source_node else None,
-            'goals': [node.name for node in self.goal_nodes]
+            'goals': [node.name for node in self.goal_nodes],
+            'text_annotations': [dict(ann) for ann in self.text_annotations],
+            'annotation_counter': self.annotation_counter
         }
         
         self.undo_stack.append(json.dumps(state))
@@ -2583,7 +2924,9 @@ class GraphVisualizer:
                 'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
                 'node_counter': self.node_counter,
                 'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes]
+                'goals': [node.name for node in self.goal_nodes],
+                'text_annotations': [dict(ann) for ann in self.text_annotations],
+                'annotation_counter': self.annotation_counter
             })
             self.redo_stack.append(current)
             
@@ -2597,7 +2940,9 @@ class GraphVisualizer:
                 'nodes': {name: node.to_dict() for name, node in self.nodes.items()},
                 'node_counter': self.node_counter,
                 'source': self.source_node.name if self.source_node else None,
-                'goals': [node.name for node in self.goal_nodes]
+                'goals': [node.name for node in self.goal_nodes],
+                'text_annotations': [dict(ann) for ann in self.text_annotations],
+                'annotation_counter': self.annotation_counter
             })
             self.undo_stack.append(current)
             
@@ -2641,6 +2986,10 @@ class GraphVisualizer:
             self.source_node = None
         
         self.goal_nodes = [self.nodes[name] for name in state['goals']]
+        
+        # Restore text annotations
+        self.text_annotations = state.get('text_annotations', [])
+        self.annotation_counter = state.get('annotation_counter', 0)
         
         self.render()
         self.update_graph_stats()
