@@ -2462,12 +2462,12 @@ class GraphVisualizer:
     
     def export_pdf(self, event):
         """Export comprehensive PDF report"""
-        if not window.jsPDF:
+        if not hasattr(window, 'jspdf'):
             alert('PDF library not loaded')
             return
         
-        # Create PDF document
-        pdf = window.jsPDF.jsPDF()
+        # Create PDF document from UMD bundle
+        pdf = window.jspdf.jsPDF()
         
         # Add title
         pdf.setFontSize(20)
@@ -2475,32 +2475,59 @@ class GraphVisualizer:
         
         # Add metadata
         pdf.setFontSize(12)
-        pdf.text(f'Algorithm: {document["algorithm-select"].options[document["algorithm-select"].selectedIndex].text}', 20, 35)
-        pdf.text(f'Date: {window.Date().new().toLocaleString()}', 20, 42)
+        algo_name = document["algorithm-select"].options[document["algorithm-select"].selectedIndex].text
+        pdf.text(f'Algorithm: {algo_name}', 20, 35)
+        pdf.text(f'Date: {window.Date.new().toLocaleString()}', 20, 42)
         
-        # Add graph image
+        # Add graph image with proper aspect ratio
         data_url = self.canvas.toDataURL('image/png')
-        pdf.addImage(data_url, 'PNG', 20, 50, 170, 100)
+        img_width = 170
+        img_height = img_width * (self.canvas.height / self.canvas.width)
+        pdf.addImage(data_url, 'PNG', 20, 50, img_width, img_height)
         
         # Add results
+        y_pos = 50 + img_height + 15
         pdf.setFontSize(14)
-        pdf.text('Search Results:', 20, 160)
+        pdf.text('Search Results:', 20, y_pos)
         pdf.setFontSize(10)
         
-        y_pos = 170
+        y_pos += 10
         if self.search_agent:
             if self.search_agent.success:
                 pdf.text(f'Status: Goal Found', 20, y_pos)
                 y_pos += 7
                 pdf.text(f'Path Cost: {self.search_agent.path_cost}', 20, y_pos)
                 y_pos += 7
-                pdf.text(f'Path: {" -> ".join(map(str, self.search_agent.path_found))}', 20, y_pos)
+                
+                # Use custom names for path if available
+                path_names = []
+                for node_id in self.search_agent.path_found:
+                    node = self.nodes.get(node_id)
+                    if node:
+                        path_names.append(node.custom_name if hasattr(node, 'custom_name') else str(node.name))
+                    else:
+                        path_names.append(str(node_id))
+                        
+                path_text = f'Path: {" -> ".join(path_names)}'
+                
+                # Wrap text if it's too long
+                lines = pdf.splitTextToSize(path_text, 170)
+                pdf.text(lines, 20, y_pos)
+                y_pos += 7 * len(lines)
             else:
                 failure_msg = self.search_agent.failure_reason if self.search_agent.failure_reason else 'No Path Found'
                 pdf.text(f'Status: {failure_msg}', 20, y_pos)
+                y_pos += 7
             
-            y_pos += 7
             pdf.text(f'Nodes Explored: {self.search_agent.nodes_explored}', 20, y_pos)
+            y_pos += 7
+            
+            # Additional stats
+            pdf.text(f'Total States Generated: {len(self.animation_states)}', 20, y_pos)
+            y_pos += 7
+            pdf.text(f'Node Count: {len(self.nodes)}', 20, y_pos)
+        else:
+            pdf.text('No search has been run yet.', 20, y_pos)
         
         # Save PDF
         pdf.save('search-report.pdf')
@@ -2514,24 +2541,124 @@ class GraphVisualizer:
     
     def generate_svg(self):
         """Generate SVG representation of graph"""
-        svg = f'<svg width="{self.canvas.width}" height="{self.canvas.height}" xmlns="http://www.w3.org/2000/svg">\n'
+        def escape_xml(s):
+            return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
+            
+        svg = f'<svg width="{self.window_width}" height="{self.window_height}" viewBox="0 0 {self.window_width} {self.window_height}" xmlns="http://www.w3.org/2000/svg">\n'
         
         # Add background
-        svg += f'  <rect width="100%" height="100%" fill="#ffffff"/>\n'
+        is_dark_mode = 'dark-mode' in document.body.classList
+        bg_color = '#0a0a0a' if is_dark_mode else '#ffffff'
+        svg += f'  <rect width="100%" height="100%" fill="{bg_color}"/>\n'
         
-        # Add edges
+        # Draw grid
+        if self.show_grid:
+            grid_size = 50 * self.zoom
+            offset_x = self.view_offset_x % grid_size
+            offset_y = self.view_offset_y % grid_size
+            grid_color = "rgba(255,255,255,0.05)" if is_dark_mode else "rgba(0,0,0,0.05)"
+            
+            x = offset_x
+            while x < self.window_width:
+                svg += f'  <line x1="{x}" y1="0" x2="{x}" y2="{self.window_height}" stroke="{grid_color}" stroke-width="1"/>\n'
+                x += grid_size
+                
+            y = offset_y
+            while y < self.window_height:
+                svg += f'  <line x1="0" y1="{y}" x2="{self.window_width}" y2="{y}" stroke="{grid_color}" stroke-width="1"/>\n'
+                y += grid_size
+        
+        # Group for pan/zoom
+        svg += f'  <g transform="translate({self.view_offset_x}, {self.view_offset_y}) scale({self.zoom})">\n'
+        
+        # Edges
+        drawn_undirected = set()
         for node in self.nodes.values():
             for neighbor, weight in node.neighbors.items():
-                svg += f'  <line x1="{node.x}" y1="{node.y}" x2="{neighbor.x}" y2="{neighbor.y}" '
-                svg += f'stroke="#9ca3af" stroke-width="2"/>\n'
-                
-                # Add weight label when labels are enabled
-                if hasattr(self, 'show_labels') and self.show_labels:
-                    mid_x = (node.x + neighbor.x) / 2
-                    mid_y = (node.y + neighbor.y) / 2
-                    svg += f'  <text x="{mid_x}" y="{mid_y - 10}" text-anchor="middle" font-size="12">{weight}</text>\n'
-        
-        # Add nodes
+                if self.graph_is_undirected:
+                    edge_id = tuple(sorted([str(node.name), str(neighbor.name)]))
+                    if edge_id in drawn_undirected:
+                        continue
+                    drawn_undirected.add(edge_id)
+                    
+                    edge_key = (node.name, neighbor.name)
+                    edge_key_rev = (neighbor.name, node.name)
+                    is_path_edge = edge_key in self.path_edges or edge_key_rev in self.path_edges
+                    color = '#00ff00' if is_path_edge else '#94a3b8'
+                    width = 5 if is_path_edge else 3
+                    
+                    svg += f'    <line x1="{node.x}" y1="{node.y}" x2="{neighbor.x}" y2="{neighbor.y}" stroke="{color}" stroke-width="{width}"/>\n'
+                    
+                    # Label
+                    has_custom_label = hasattr(node, 'get_edge_label') and node.get_edge_label(neighbor) is not None
+                    should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
+                    if should_show_weight:
+                        mid_x = (node.x + neighbor.x) / 2
+                        mid_y = (node.y + neighbor.y) / 2
+                        label = node.get_edge_label(neighbor) if hasattr(node, 'get_edge_label') else None
+                        text = escape_xml(str(label) if label is not None else str(weight))
+                        
+                        bg_fill = 'rgba(30,30,30,0.85)' if is_dark_mode else 'rgba(255,255,255,0.8)'
+                        text_fill = '#e5e7eb' if is_dark_mode else '#374151'
+                        
+                        svg += f'    <rect x="{mid_x - 12}" y="{mid_y - 10}" width="24" height="20" fill="{bg_fill}" rx="4"/>\n'
+                        svg += f'    <text x="{mid_x}" y="{mid_y}" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="bold" fill="{text_fill}" font-family="Inter, sans-serif">{text}</text>\n'
+                        
+                else:
+                    # Directed graph
+                    has_reverse = neighbor in self.nodes.values() and node in neighbor.neighbors
+                    offset_x = 0
+                    offset_y = 0
+                    if has_reverse:
+                        dx = neighbor.x - node.x
+                        dy = neighbor.y - node.y
+                        length = math.sqrt(dx * dx + dy * dy)
+                        if length > 0:
+                            offset_x = -dy / length * 10
+                            offset_y = dx / length * 10
+                            
+                    edge_key = (node.name, neighbor.name)
+                    is_path_edge = edge_key in self.path_edges
+                    color = '#00ff00' if is_path_edge else '#94a3b8'
+                    width = 5 if is_path_edge else 3
+                    
+                    start_x = node.x + offset_x
+                    start_y = node.y + offset_y
+                    end_x = neighbor.x + offset_x
+                    end_y = neighbor.y + offset_y
+                    
+                    svg += f'    <line x1="{start_x}" y1="{start_y}" x2="{end_x}" y2="{end_y}" stroke="{color}" stroke-width="{width}"/>\n'
+                    
+                    # Arrow
+                    angle = math.atan2(neighbor.y - node.y, neighbor.x - node.x)
+                    arrow_length = 12
+                    node_radius, _ = self.get_node_radius_and_lines(self.ctx, neighbor)
+                    arr_x = neighbor.x - math.cos(angle) * node_radius + offset_x
+                    arr_y = neighbor.y - math.sin(angle) * node_radius + offset_y
+                    
+                    pt1_x = arr_x - arrow_length * math.cos(angle - math.pi / 6)
+                    pt1_y = arr_y - arrow_length * math.sin(angle - math.pi / 6)
+                    pt2_x = arr_x - arrow_length * math.cos(angle + math.pi / 6)
+                    pt2_y = arr_y - arrow_length * math.sin(angle + math.pi / 6)
+                    
+                    svg += f'    <polyline points="{pt1_x},{pt1_y} {arr_x},{arr_y} {pt2_x},{pt2_y}" stroke="{color}" stroke-width="{width}" fill="none"/>\n'
+                    
+                    # Label
+                    has_custom_label = hasattr(node, 'get_edge_label') and node.get_edge_label(neighbor) is not None
+                    should_show_weight = (hasattr(self, 'show_labels') and self.show_labels) or has_custom_label
+                    if should_show_weight:
+                        mid_x = (node.x + neighbor.x) / 2 + offset_x
+                        mid_y = (node.y + neighbor.y) / 2 + offset_y
+                        label = node.get_edge_label(neighbor) if hasattr(node, 'get_edge_label') else None
+                        text = escape_xml(str(label) if label is not None else str(weight))
+                        
+                        bg_fill = 'rgba(30,30,30,0.85)' if is_dark_mode else 'rgba(255,255,255,0.8)'
+                        text_fill = '#e5e7eb' if is_dark_mode else '#374151'
+                        
+                        svg += f'    <rect x="{mid_x - 12}" y="{mid_y - 10}" width="24" height="20" fill="{bg_fill}" rx="4"/>\n'
+                        svg += f'    <text x="{mid_x}" y="{mid_y}" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="bold" fill="{text_fill}" font-family="Inter, sans-serif">{text}</text>\n'
+
+        # Nodes
         colors = {
             'empty': '#ffffff',
             'source': '#ef4444',
@@ -2541,30 +2668,68 @@ class GraphVisualizer:
         }
         
         for node in self.nodes.values():
-            display_name = node.custom_name if hasattr(node, 'custom_name') else str(node.name)
-            color = colors.get(node.state, '#ffffff')
-            svg += f'  <circle cx="{node.x}" cy="{node.y}" r="20" fill="{color}" stroke="#374151" stroke-width="2"/>\n'
-            svg += f'  <text x="{node.x}" y="{node.y}" text-anchor="middle" dominant-baseline="middle" font-size="14">{display_name}</text>\n'
+            radius, lines = self.get_node_radius_and_lines(self.ctx, node)
+            color = colors.get(node.state, colors['empty'])
+            is_selected = (self.selected_node == node)
+            stroke_color = '#3b82f6' if is_selected else '#374151'
+            stroke_width = 4 if is_selected else 3
+            
+            if is_selected:
+                svg += f'    <circle cx="{node.x}" cy="{node.y}" r="{radius + 5}" fill="none" stroke="#3b82f6" stroke-width="{3 / self.zoom}"/>\n'
+                
+            svg += f'    <circle cx="{node.x}" cy="{node.y}" r="{radius}" fill="{color}" stroke="{stroke_color}" stroke-width="{stroke_width}"/>\n'
+            
+            text_color = '#111827' if node.state in ['empty', 'path'] else '#ffffff'
+            
+            should_show_heuristic = (
+                node.heuristic > 0 and 
+                hasattr(self, 'current_algo_type') and 
+                self.current_algo_type == 'informed'
+            )
+            
+            total_lines = len(lines) + (1 if should_show_heuristic else 0)
+            line_height = 16
+            start_y = node.y - ((total_lines - 1) * line_height) / 2
+            
+            for i, line in enumerate(lines):
+                escaped_line = escape_xml(line)
+                svg += f'    <text x="{node.x}" y="{start_y + i * line_height}" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="bold" font-family="Inter, sans-serif" fill="{text_color}">{escaped_line}</text>\n'
+                
+            if should_show_heuristic:
+                h_text = escape_xml(f"h={node.heuristic}")
+                svg += f'    <text x="{node.x}" y="{start_y + len(lines) * line_height}" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="bold" font-family="Inter, sans-serif" fill="{text_color}">{h_text}</text>\n'
         
-        # Add text annotations
+        # Text Annotations
         for annotation in self.text_annotations:
-            ax, ay = annotation['x'], annotation['y']
             text = annotation['text']
             font_size = annotation.get('font_size', 16)
+            ax, ay = annotation['x'], annotation['y']
             lines = text.split('\n')
+            
+            self.ctx.font = f'{font_size}px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+            max_line_width = max([self.ctx.measureText(line).width for line in lines]) if lines else 0
+            
             line_height = font_size * 1.4
             total_height = len(lines) * line_height
-            max_line_width = max(len(line) * font_size * 0.6 for line in lines) if lines else 0
             padding = 10
+            
             bg_x = ax - max_line_width / 2 - padding
             bg_y = ay - total_height / 2 - padding
             bg_w = max_line_width + padding * 2
             bg_h = total_height + padding * 2
-            svg += f'  <rect x="{bg_x}" y="{bg_y}" width="{bg_w}" height="{bg_h}" fill="rgba(255,255,255,0.9)" stroke="rgba(0,0,0,0.15)" stroke-width="1.5" rx="6"/>\n'
+            
+            bg_fill = 'rgba(30, 30, 30, 0.85)' if is_dark_mode else 'rgba(255, 255, 255, 0.9)'
+            border_color = 'rgba(100, 100, 100, 0.5)' if is_dark_mode else 'rgba(0, 0, 0, 0.15)'
+            text_color = '#e5e7eb' if is_dark_mode else '#1f2937'
+            
+            svg += f'    <rect x="{bg_x}" y="{bg_y}" width="{bg_w}" height="{bg_h}" fill="{bg_fill}" stroke="{border_color}" stroke-width="1.5" rx="6"/>\n'
+            
             start_y = ay - (total_height / 2) + (line_height / 2)
             for i, line in enumerate(lines):
-                svg += f'  <text x="{ax}" y="{start_y + i * line_height}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="#1f2937">{line}</text>\n'
-        
+                escaped_line = escape_xml(line)
+                svg += f'    <text x="{ax}" y="{start_y + i * line_height}" text-anchor="middle" dominant-baseline="central" font-size="{font_size}" font-family="Inter, sans-serif" fill="{text_color}">{escaped_line}</text>\n'
+                
+        svg += '  </g>\n'
         svg += '</svg>'
         return svg
     
